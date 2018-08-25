@@ -107,7 +107,7 @@ class lowPEG_lib():
         context.lowPEG_equity    = g.quantlib.fun_delNewShare(context, lowPEG_equity, 60)
         context.lowPEG_moneyfund = g.quantlib.fun_delNewShare(context, lowPEG_moneyfund, 60)
 
-        context.lowPEG_hold_num = 3
+        context.lowPEG_hold_num = 5
         context.lowPEG_risk_ratio = 0.03 / context.lowPEG_hold_num
 
     def fun_needRebalance(self, context):
@@ -502,9 +502,11 @@ class lowPEG_lib():
                     valuation.code,                         # 股票代码
                     # valuation.market_cap,                   # 总市值(亿元)
                     valuation.pe_ratio, 
+                    valuation.pb_ratio,
                     indicator.roe,
                     indicator.roa,
                     indicator.gross_profit_margin,
+                    
     
                     income.net_profit,                      # 净利润(元)
                     income.financial_expense,               # 财务费用(元)
@@ -575,6 +577,11 @@ class lowPEG_lib():
             roa_rank = pd.DataFrame({'roa_rank': idx})
             df = pd.concat([df, roa_rank], axis=1)
 
+            df = df.sort('pb_ratio',ascending=True)
+            idx = pd.Series(np.arange(1,len(df)+1), index=df['pb_ratio'].index.values)
+            pb_rank = pd.DataFrame({'pb_rank': idx})
+            df = pd.concat([df, pb_rank], axis=1)
+
             df = df.sort('gross_profit_margin',ascending=False)
             idx = pd.Series(np.arange(1,len(df)+1), index=df['gross_profit_margin'].index.values)
             gross_profit_margin_rank = pd.DataFrame({'gross_profit_margin_rank': idx})
@@ -620,7 +627,7 @@ class lowPEG_lib():
         stock_list = g.quantlib.unpaused(stock_list)
         stock_list = g.quantlib.fun_remove_cycle_industry(context, stock_list)
         stock_list = fun_filter_by_fcff(stock_list)
-        stock_list = fun_filter_by_pe(stock_list)
+        # stock_list = fun_filter_by_pe(stock_list)
         # stock_list = fun_filter_by_rsi(stock_list, today)
 
         if len(stock_list) == 0:
@@ -643,6 +650,7 @@ class lowPEG_lib():
                 # buydict[stock] = stock_PEG[stock]
         # cap_dict = fun_get_stock_market_cap(stock_list)
         # buydict = sorted(cap_dict.items(), key=lambda d:d[1], reverse=False)
+        # stock_list = fun_filter_by_fcff(stock_list)
         stock_list = fun_sort_stock(stock_list, stock_PEG, stock_dict)
 
         buylist = []
@@ -655,11 +663,11 @@ class lowPEG_lib():
                 i += 1
         
         if len(buylist) < context.lowPEG_hold_num:
-            old_stocks_PEG = self.fun_cal_stock_PEG(context, old_stocks_list, stock_dict)
+            old_stocks_PEG = stock_PEG #self.fun_cal_stock_PEG(context, old_stocks_list, stock_dict)
             tmpDict = {}
             tmpList = []
-            for stock in old_stocks_PEG.keys():
-                if old_stocks_PEG[stock] < 1.0 and old_stocks_PEG[stock] > 0:
+            for stock in old_stocks_list:
+                if old_stocks_PEG[stock] < 1 and old_stocks_PEG[stock] > 0:
                     tmpDict[stock] = old_stocks_PEG[stock]
             tmpDict = sorted(tmpDict.items(), key=lambda d:d[1], reverse=False)
             i = len(buylist)
@@ -824,7 +832,9 @@ class quantlib():
                 self.fun_tradeBond(context, stock, total_value * ratio)
             else:
                 curPrice = history(1,'1d', 'close', stock, df=False)[stock][-1]
-                curValue = context.portfolio.positions[stock].total_amount * curPrice
+                curValue = 0
+                if stock in context.portfolio.positions.keys():
+                  curValue = context.portfolio.positions[stock].total_amount * curPrice
                 Quota = total_value * ratio
                 if Quota:
                     if abs(Quota - curValue) / Quota >= 0.25:
@@ -1220,7 +1230,9 @@ class quantlib():
     def fun_tradeBond(self, context, stock, Value):
         hStocks = history(1, '1d', 'close', stock, df=False)
         curPrice = hStocks[stock]
-        curValue = float(context.portfolio.positions[stock].total_amount * curPrice)
+        curValue = 0
+        if stock in context.portfolio.positions.keys():
+          curValue = context.portfolio.positions[stock].total_amount * curPrice
         deltaValue = abs(Value - curValue)
         if deltaValue > (curPrice*100):
             if Value > curValue:
@@ -1256,4 +1268,17 @@ class quantlib():
         if stock in context.lowPEG_moneyfund:
             set_order_cost(OrderCost(open_tax=0, close_tax=0, open_commission=0, close_commission=0, close_today_commission=0, min_commission=0), type='stock')
         else:
-            set_order_cost(OrderCost(open_tax=0, close_tax=0.001, open_commission=0.0003, close_commission=0.0003, close_today_commission=0, min_commission=5), type='stock')
+            # set_order_cost(OrderCost(open_tax=0, close_tax=0.001, open_commission=0.0003, close_commission=0.0003, close_today_commission=0, min_commission=5), type='stock')
+            dt = context.current_dt
+
+            if dt > datetime.datetime(2013, 1, 1):
+                set_commission(PerTrade(buy_cost=0.0003, sell_cost=0.0003, min_cost=5))
+
+            elif dt > datetime.datetime(2011, 1, 1):
+                set_commission(PerTrade(buy_cost=0.001, sell_cost=0.002, min_cost=5))
+
+            elif dt > datetime.datetime(2009, 1, 1):
+                set_commission(PerTrade(buy_cost=0.002, sell_cost=0.003, min_cost=5))
+
+            else:
+                set_commission(PerTrade(buy_cost=0.003, sell_cost=0.004, min_cost=5))
