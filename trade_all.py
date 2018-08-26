@@ -14,6 +14,7 @@ from scipy import linalg as sla
 from scipy import spatial
 from jqdata import jy
 from jqlib.technical_analysis import *
+from hmmlearn.hmm import GaussianHMM
 
 # from tradelib import *
 # from adjust_position_rules import *
@@ -48,6 +49,9 @@ def select_strategy():
     g.position_stock_config = [
         [False, '个股止损', Stop_loss_stocks, {
             'period': period  # 调仓频率，日
+        }],
+        [True, 'HMM止损', Stop_stocks_hmm, {
+            
         }],
         [False, '个股止盈', Stop_profit_stocks, {
             'period': period,  # 调仓频率，日
@@ -188,6 +192,9 @@ def set_backtest():
 def initialize(context):
     log.info("==> initialize @ %s" % (str(context.current_dt)))
 
+    g.hmm = GaussianHMM(n_components= 3, covariance_type="diag", n_iter=2000)
+    context.lastMonth = -1
+
     set_params()  # 1设置策略参数
     set_variables(context)  # 2设置中间变量
     set_backtest()  # 3设置回测条件
@@ -230,6 +237,7 @@ def initialize(context):
     # 打印规则参数
     log_param()
 
+    context.trade_ratio = {}
     run_daily(trade_main, '10:30')
 
 
@@ -269,6 +277,10 @@ def trade_main(context):
     context.flags_can_sell = True
     context.flags_can_buy = True
     data = {}
+
+    # 持仓股票动作的执行,目前为个股止损止盈
+    for rule in g.position_stock_rules:
+        rule.handle_data(context, data)
 
     # 执行其它辅助规则
     for rule in g.other_rules:
@@ -333,11 +345,7 @@ def trade_main(context):
     # ----------------------------------------------------
     
     fun_do_trade(context, context.trade_ratio, context.lowPEG_moneyfund)
-
-def handle_data(context, data):
-    # 持仓股票动作的执行,目前为个股止损止盈
-    for rule in g.position_stock_rules:
-        rule.handle_data(context, data)
+    
 
 # 这里示例进行模拟更改回测时，如何调整策略,基本通用代码。
 def after_code_changed(context):
@@ -703,7 +711,10 @@ class Period_condition(Adjust_condition):
         self.log_info("调仓日计数 [%d]" % (self.day_count))
         stock_count = len(context.portfolio.positions)
         self.t_can_adjust = stock_count == 0 or self.day_count % self.period == 0
-        if stock_count > 0: 
+        if context.preReturn <= 0:
+            self.t_can_adjust = False
+
+        if stock_count > 0 : 
             self.day_count += 1    
         pass
 
@@ -713,14 +724,13 @@ class Period_condition(Adjust_condition):
         pass
 
     def when_sell_stock(self, position, order, is_normal):
-        if not is_normal:
-            # 个股止损止盈时，即非正常卖股时，重置计数，原策略是这么写的
-            self.day_count = 0
+        # if not is_normal:
+            # self.day_count = -15
         pass
 
     # 清仓时调用的函数
     def when_clear_position(self, context):
-        self.day_count = 0
+        # self.day_count = -15
         pass
 
     def __str__(self):
@@ -776,7 +786,103 @@ class Index28_condition(Adjust_condition):
             self.index_growth_rate * 100)
 
 
+class Precent_condition(Adjust_condition):
+    """28指数涨幅调仓判断器"""
+    # TODO 可以做性能优化,每天只需计算一次,不需要每分钟调用
+
+    def __init__(self, params):
+        self.t_can_adjust = False
+
+    def update_params(self, context, params):
+        pass
+
+    @property
+    def can_adjust(self):
+        return self.t_can_adjust
+
+    def handle_data(self, context, data):
+        # 回看指数前20天的涨幅
+        gr_index2 = get_growth_rate(self.index2)
+        gr_index8 = get_growth_rate(self.index8)
+        self.log_info("当前%s指数的20日涨幅 [%.2f%%]" % (get_security_info(self.index2).display_name, gr_index2 * 100))
+        self.log_info("当前%s指数的20日涨幅 [%.2f%%]" % (get_security_info(self.index8).display_name, gr_index8 * 100))
+        if gr_index2 <= self.index_growth_rate and gr_index8 <= self.index_growth_rate:
+            msg = "==> 当日%s指数和%s指数的20日增幅低于[%.2f%%]，执行28指数止损" \
+                  % (
+                      get_security_info(self.index2).display_name,
+                      get_security_info(self.index8).display_name,
+                      self.index_growth_rate * 100)
+            self.log_weixin(context, msg)
+            self.clear_position(context)
+            self.t_can_adjust = False
+        else:
+            self.t_can_adjust = True
+        pass
+
+    def before_trading_start(self, context):
+        pass
+
+    def __str__(self):
+        return '28指数择时: [大盘指数:%s %s] [小盘指数:%s %s] [判定调仓的二八指数20日增幅 %.2f%%]' % (
+            self.index2, get_security_info(self.index2).display_name,
+            self.index8, get_security_info(self.index8).display_name,
+            self.index_growth_rate * 100)
+
+
 # ===================== 各种止损实现 ================================================
+class Stop_stocks_hmm(Rule):
+    """日内个股止损器,日内价格低于当日最高值达到阈值则平仓止损"""
+
+    def __init__(self, params):
+        self.on_close_position = close_position  # 卖股回调函数
+
+    def update_params(self, context, params):
+        pass
+
+    def before_trading_start(self, context):
+        pass
+
+    # 个股止损
+    def handle_data(self, context, data):
+        self.calc_prereturn(context)
+        if context.preReturn <= 0 :
+            for stock in context.trade_ratio:
+                context.trade_ratio[stock] = 0
+            
+        pass
+
+    def calc_prereturn(self, context):
+        today = context.current_dt
+        yestoday = today - datetime.timedelta(days=1)
+        if today.month != context.lastMonth:
+            context.lastMonth = today.month
+            A, logReturn_1 = func_get_hmm_data('000001.XSHG', '2005-05-20', yestoday)
+            g.hmm.fit(A)
+            
+        start_date = today - datetime.timedelta(days=91)
+        A, Re = func_get_hmm_data('000001.XSHG', start_date, yestoday)
+        hidden_states = g.hmm.predict(A)
+        # print('Re', Re)
+        expect = []
+        for i in range(g.hmm.n_components):
+            state = (hidden_states == i)
+            idx = np.append(0,state[:-1])
+            # print('idx', i, idx)
+            expect.append(np.mean([idx[j] * Re[j] for j in range(len(idx))]))
+            
+        signl = 1
+        # if expect
+            
+        # print("hidden_states[-1]", hidden_states[-1])
+        pro=np.array([g.hmm.transmat_[hidden_states[-1],i] for i in range(g.hmm.n_components)])
+        preReturn = pro.dot(expect) + 0.0025
+        record(preReturn=preReturn*1000)
+        context.preReturn = preReturn
+        # print('expect=',expect, pro, preReturn)
+        pass
+
+    def __str__(self):
+        return 'HMM止损'
 
 
 class Stop_loss_stocks(Rule):
@@ -793,19 +899,22 @@ class Stop_loss_stocks(Rule):
     # 个股止损
     def handle_data(self, context, data):
         for stock in context.portfolio.positions.keys():
-            cur_price = data[stock].close
-            xi = attribute_history(stock, 2, '1d', 'high', skip_paused=True)
-            ma = xi.max()
+            xi = attribute_history(stock, 2, '1d', fields=['close','high'], skip_paused=True)
+            ma = xi['high'].max()
+            cur_price = xi['close'][-1]
+
             if not self.last_high.has_key(stock) or self.last_high[stock] < cur_price:
                 self.last_high[stock] = cur_price
 
-            threshold = self.__get_stop_loss_threshold(stock, self.period)
+            # threshold = self.__get_stop_loss_threshold(stock, self.period)
             # log.debug("个股止损阈值, stock: %s, threshold: %f" %(stock, threshold))
-            if cur_price < self.last_high[stock] * (1 - threshold):
-                msg = "==> 个股止损, stock: %s, cur_price: %f, last_high: %f, threshold: %f" \
-                              % (stock, cur_price, self.last_high[stock], threshold)
-                self.log_weixin(context, msg)
+            if cur_price < self.last_high[stock] * 0.6:
+                # msg = "==> 个股止损, stock: %s, cur_price: %f, last_high: %f, threshold: %f" \
+                #               % (stock, cur_price, self.last_high[stock], threshold)
+                # self.log_weixin(context, msg)
                 position = context.portfolio.positions[stock]
+                if stock in context.trade_ratio:
+                    context.trade_ratio[stock] = 0
                 self.close_position(position, False)
 
     # 获取个股前n天的m日增幅值序列
@@ -1305,7 +1414,7 @@ class Buy_stocks_var(Adjust_position):
         context.trade_ratio = trade_ratio
 
     def __str__(self):
-        return '股票调仓买入规则：使用 VaR 方式买入(小兵哥)'
+        return '股票调仓买入规则：使用 VaR 方式买入'
 
 # ==================== 选股query过滤器实现 ===========================================
 
@@ -2881,4 +2990,29 @@ def fun_setCommission(context, stock):
 
         else:
             set_commission(PerTrade(buy_cost=0.003, sell_cost=0.004, min_cost=5))
+
+def func_get_hmm_data(stock, beginDate, endDate):
+    data = get_price(stock, start_date=beginDate, end_date=endDate, frequency='1d')
+    # data = attribute_history(stock, start_date=beginDate, end_date=endDate, unit='5d', fields=['close','volume','money','high','low'])
+    # print(data)
+    volume = data['volume']
+    close = data['close']
+
+    logDiffReturn = np.log(np.array(data['high'])) - np.log(np.array(data['low']))
+    logReturn_1 = np.array(np.diff(np.log(close)))#这个作为后面计算收益使用
+    logReturn_5 = np.log(np.array(close[5:])) - np.log(np.array(close[:-5]))
+    logVol_5 = np.log(np.array(volume[5:])) - np.log(np.array(volume[:-5]))
+
+    logDiffReturn = logDiffReturn[5:]
+    logReturn_1 = logReturn_1[4:]
+    close = close[5:]
+    Date = pd.to_datetime(data.index[5:])
+
+    # print(len(logDiffReturn),len(logReturn_5),len(logVol_5))
+
+    # A = np.column_stack([logDiffReturn,logReturn_5,logVol_5])
+    # logReturn_1
+    A = np.column_stack([logReturn_1])
+
+    return A, logReturn_1
 

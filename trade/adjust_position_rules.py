@@ -1,4 +1,57 @@
 # ===================== 各种止损实现 ================================================
+class Stop_stocks_hmm(Rule):
+    """日内个股止损器,日内价格低于当日最高值达到阈值则平仓止损"""
+
+    def __init__(self, params):
+        self.on_close_position = close_position  # 卖股回调函数
+
+    def update_params(self, context, params):
+        pass
+
+    def before_trading_start(self, context):
+        pass
+
+    # 个股止损
+    def handle_data(self, context, data):
+        self.calc_prereturn(context)
+        if context.preReturn <= 0 :
+            for stock in context.trade_ratio:
+                context.trade_ratio[stock] = 0
+            
+        pass
+
+    def calc_prereturn(self, context):
+        today = context.current_dt
+        yestoday = today - datetime.timedelta(days=1)
+        if today.month != context.lastMonth:
+            context.lastMonth = today.month
+            A, logReturn_1 = func_get_hmm_data('000001.XSHG', '2005-05-20', yestoday)
+            g.hmm.fit(A)
+            
+        start_date = today - datetime.timedelta(days=91)
+        A, Re = func_get_hmm_data('000001.XSHG', start_date, yestoday)
+        hidden_states = g.hmm.predict(A)
+        # print('Re', Re)
+        expect = []
+        for i in range(g.hmm.n_components):
+            state = (hidden_states == i)
+            idx = np.append(0,state[:-1])
+            # print('idx', i, idx)
+            expect.append(np.mean([idx[j] * Re[j] for j in range(len(idx))]))
+            
+        signl = 1
+        # if expect
+            
+        # print("hidden_states[-1]", hidden_states[-1])
+        pro=np.array([g.hmm.transmat_[hidden_states[-1],i] for i in range(g.hmm.n_components)])
+        preReturn = pro.dot(expect) + 0.0025
+        record(preReturn=preReturn*1000)
+        context.preReturn = preReturn
+        # print('expect=',expect, pro, preReturn)
+        pass
+
+    def __str__(self):
+        return 'HMM止损'
 
 
 class Stop_loss_stocks(Rule):
@@ -15,19 +68,22 @@ class Stop_loss_stocks(Rule):
     # 个股止损
     def handle_data(self, context, data):
         for stock in context.portfolio.positions.keys():
-            cur_price = data[stock].close
-            xi = attribute_history(stock, 2, '1d', 'high', skip_paused=True)
-            ma = xi.max()
+            xi = attribute_history(stock, 2, '1d', fields=['close','high'], skip_paused=True)
+            ma = xi['high'].max()
+            cur_price = xi['close'][-1]
+
             if not self.last_high.has_key(stock) or self.last_high[stock] < cur_price:
                 self.last_high[stock] = cur_price
 
-            threshold = self.__get_stop_loss_threshold(stock, self.period)
+            # threshold = self.__get_stop_loss_threshold(stock, self.period)
             # log.debug("个股止损阈值, stock: %s, threshold: %f" %(stock, threshold))
-            if cur_price < self.last_high[stock] * (1 - threshold):
-                msg = "==> 个股止损, stock: %s, cur_price: %f, last_high: %f, threshold: %f" \
-                              % (stock, cur_price, self.last_high[stock], threshold)
-                self.log_weixin(context, msg)
+            if cur_price < self.last_high[stock] * 0.6:
+                # msg = "==> 个股止损, stock: %s, cur_price: %f, last_high: %f, threshold: %f" \
+                #               % (stock, cur_price, self.last_high[stock], threshold)
+                # self.log_weixin(context, msg)
                 position = context.portfolio.positions[stock]
+                if stock in context.trade_ratio:
+                    context.trade_ratio[stock] = 0
                 self.close_position(position, False)
 
     # 获取个股前n天的m日增幅值序列
@@ -527,4 +583,4 @@ class Buy_stocks_var(Adjust_position):
         context.trade_ratio = trade_ratio
 
     def __str__(self):
-        return '股票调仓买入规则：使用 VaR 方式买入(小兵哥)'
+        return '股票调仓买入规则：使用 VaR 方式买入'

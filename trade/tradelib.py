@@ -574,3 +574,28 @@ def fun_setCommission(context, stock):
 
         else:
             set_commission(PerTrade(buy_cost=0.003, sell_cost=0.004, min_cost=5))
+
+def func_get_hmm_data(stock, beginDate, endDate):
+    data = get_price(stock, start_date=beginDate, end_date=endDate, frequency='1d')
+    # data = attribute_history(stock, start_date=beginDate, end_date=endDate, unit='5d', fields=['close','volume','money','high','low'])
+    # print(data)
+    volume = data['volume']
+    close = data['close']
+
+    logDiffReturn = np.log(np.array(data['high'])) - np.log(np.array(data['low']))
+    logReturn_1 = np.array(np.diff(np.log(close)))#这个作为后面计算收益使用
+    logReturn_5 = np.log(np.array(close[5:])) - np.log(np.array(close[:-5]))
+    logVol_5 = np.log(np.array(volume[5:])) - np.log(np.array(volume[:-5]))
+
+    logDiffReturn = logDiffReturn[5:]
+    logReturn_1 = logReturn_1[4:]
+    close = close[5:]
+    Date = pd.to_datetime(data.index[5:])
+
+    # print(len(logDiffReturn),len(logReturn_5),len(logVol_5))
+
+    # A = np.column_stack([logDiffReturn,logReturn_5,logVol_5])
+    # logReturn_1
+    A = np.column_stack([logReturn_1])
+
+    return A, logReturn_1

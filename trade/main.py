@@ -14,6 +14,7 @@ from scipy import linalg as sla
 from scipy import spatial
 from jqdata import jy
 from jqlib.technical_analysis import *
+from hmmlearn.hmm import GaussianHMM
 
 # from tradelib import *
 # from adjust_position_rules import *
@@ -48,6 +49,9 @@ def select_strategy():
     g.position_stock_config = [
         [False, '个股止损', Stop_loss_stocks, {
             'period': period  # 调仓频率，日
+        }],
+        [True, 'HMM止损', Stop_stocks_hmm, {
+            
         }],
         [False, '个股止盈', Stop_profit_stocks, {
             'period': period,  # 调仓频率，日
@@ -188,6 +192,9 @@ def set_backtest():
 def initialize(context):
     log.info("==> initialize @ %s" % (str(context.current_dt)))
 
+    g.hmm = GaussianHMM(n_components= 3, covariance_type="diag", n_iter=2000)
+    context.lastMonth = -1
+
     set_params()  # 1设置策略参数
     set_variables(context)  # 2设置中间变量
     set_backtest()  # 3设置回测条件
@@ -230,6 +237,7 @@ def initialize(context):
     # 打印规则参数
     log_param()
 
+    context.trade_ratio = {}
     run_daily(trade_main, '10:30')
 
 
@@ -269,6 +277,10 @@ def trade_main(context):
     context.flags_can_sell = True
     context.flags_can_buy = True
     data = {}
+
+    # 持仓股票动作的执行,目前为个股止损止盈
+    for rule in g.position_stock_rules:
+        rule.handle_data(context, data)
 
     # 执行其它辅助规则
     for rule in g.other_rules:
@@ -333,11 +345,7 @@ def trade_main(context):
     # ----------------------------------------------------
     
     fun_do_trade(context, context.trade_ratio, context.lowPEG_moneyfund)
-
-def handle_data(context, data):
-    # 持仓股票动作的执行,目前为个股止损止盈
-    for rule in g.position_stock_rules:
-        rule.handle_data(context, data)
+    
 
 # 这里示例进行模拟更改回测时，如何调整策略,基本通用代码。
 def after_code_changed(context):

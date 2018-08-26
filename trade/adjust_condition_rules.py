@@ -60,7 +60,10 @@ class Period_condition(Adjust_condition):
         self.log_info("调仓日计数 [%d]" % (self.day_count))
         stock_count = len(context.portfolio.positions)
         self.t_can_adjust = stock_count == 0 or self.day_count % self.period == 0
-        if stock_count > 0: 
+        if context.preReturn <= 0:
+            self.t_can_adjust = False
+
+        if stock_count > 0 : 
             self.day_count += 1    
         pass
 
@@ -70,14 +73,13 @@ class Period_condition(Adjust_condition):
         pass
 
     def when_sell_stock(self, position, order, is_normal):
-        if not is_normal:
-            # 个股止损止盈时，即非正常卖股时，重置计数，原策略是这么写的
-            self.day_count = 0
+        # if not is_normal:
+            # self.day_count = -15
         pass
 
     # 清仓时调用的函数
     def when_clear_position(self, context):
-        self.day_count = 0
+        # self.day_count = -15
         pass
 
     def __str__(self):
@@ -99,6 +101,49 @@ class Index28_condition(Adjust_condition):
         self.index2 = params.get('index2', self.index2)
         self.index8 = params.get('index8', self.index8)
         self.index_growth_rate = params.get('index_growth_rate', self.index_growth_rate)
+
+    @property
+    def can_adjust(self):
+        return self.t_can_adjust
+
+    def handle_data(self, context, data):
+        # 回看指数前20天的涨幅
+        gr_index2 = get_growth_rate(self.index2)
+        gr_index8 = get_growth_rate(self.index8)
+        self.log_info("当前%s指数的20日涨幅 [%.2f%%]" % (get_security_info(self.index2).display_name, gr_index2 * 100))
+        self.log_info("当前%s指数的20日涨幅 [%.2f%%]" % (get_security_info(self.index8).display_name, gr_index8 * 100))
+        if gr_index2 <= self.index_growth_rate and gr_index8 <= self.index_growth_rate:
+            msg = "==> 当日%s指数和%s指数的20日增幅低于[%.2f%%]，执行28指数止损" \
+                  % (
+                      get_security_info(self.index2).display_name,
+                      get_security_info(self.index8).display_name,
+                      self.index_growth_rate * 100)
+            self.log_weixin(context, msg)
+            self.clear_position(context)
+            self.t_can_adjust = False
+        else:
+            self.t_can_adjust = True
+        pass
+
+    def before_trading_start(self, context):
+        pass
+
+    def __str__(self):
+        return '28指数择时: [大盘指数:%s %s] [小盘指数:%s %s] [判定调仓的二八指数20日增幅 %.2f%%]' % (
+            self.index2, get_security_info(self.index2).display_name,
+            self.index8, get_security_info(self.index8).display_name,
+            self.index_growth_rate * 100)
+
+
+class Precent_condition(Adjust_condition):
+    """28指数涨幅调仓判断器"""
+    # TODO 可以做性能优化,每天只需计算一次,不需要每分钟调用
+
+    def __init__(self, params):
+        self.t_can_adjust = False
+
+    def update_params(self, context, params):
+        pass
 
     @property
     def can_adjust(self):

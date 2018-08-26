@@ -1282,3 +1282,22 @@ class quantlib():
 
             else:
                 set_commission(PerTrade(buy_cost=0.003, sell_cost=0.004, min_cost=5))
+
+
+#  止损
+def zhishun(context):
+    for stock in context.portfolio.positions.keys():
+        cur_price = data[stock].close
+        xi = attribute_history(stock, 2, '1d', fields=['close','high'], skip_paused=True)
+        ma = xi.max()
+        if not self.last_high.has_key(stock) or self.last_high[stock] < cur_price:
+            self.last_high[stock] = cur_price
+
+        threshold = self.__get_stop_loss_threshold(stock, self.period)
+        # log.debug("个股止损阈值, stock: %s, threshold: %f" %(stock, threshold))
+        if cur_price < self.last_high[stock] * (1 - threshold):
+            msg = "==> 个股止损, stock: %s, cur_price: %f, last_high: %f, threshold: %f" \
+                          % (stock, cur_price, self.last_high[stock], threshold)
+            self.log_weixin(context, msg)
+            position = context.portfolio.positions[stock]
+            self.close_position(position, False)
